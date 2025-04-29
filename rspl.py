@@ -70,11 +70,12 @@ class RSPLRNN(nn.Module):
     - hidden_size (int): The size of the hidden state vector.
     - num_layers (int, optional): Number of recurrent layers. Default: 1.
     """
-    def __init__(self, input_size, hidden_size, num_layers=1):
+    def __init__(self, input_size, hidden_size, num_layers=1, batch_first=False):
         super(RSPLRNN, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
+        self.batch_first = batch_first
         
         # Create a list of RSPLCell layers
         self.cells = nn.ModuleList()
@@ -85,6 +86,9 @@ class RSPLRNN(nn.Module):
             self.cells.append(RSPLCell(hidden_size, hidden_size))
 
     def forward(self, X, h0=None):
+        if self.batch_first:
+            X = X.transpose(0, 1)
+            
         seq_len, batch_size, _ = X.size()
         if h0 is None:
             h0 = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=X.device)
