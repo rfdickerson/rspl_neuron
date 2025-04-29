@@ -1,3 +1,11 @@
 __pycache__
 .venv
 *.pt
+/.DS_Store
+/benchmarks/results
+/build
+/m5_raw.zip
+/m5-forecasting-accuracy
+/m5-forecasting-accuracy.zip
+*.egg-info
+*.pdf

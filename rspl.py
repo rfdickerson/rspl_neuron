@@ -55,6 +55,8 @@ class RSPLCell(nn.Module):
         
         # Step 5: Normalize u_t to get h_t
         norm_u_t = torch.norm(u_t, p=2, dim=1, keepdim=True)  # (batch_size, 1)
+        # norm_u_t = torch.sqrt(torch.sum(u_t * u_t, dim=1, keepdim=True) + 1e-8)
+
         h_t = u_t / (norm_u_t + 1e-8)  # Add small epsilon to avoid division by zero
         
         return h_t
@@ -88,7 +90,7 @@ class RSPLRNN(nn.Module):
     def forward(self, X, h0=None):
         if self.batch_first:
             X = X.transpose(0, 1)
-            
+
         seq_len, batch_size, _ = X.size()
         if h0 is None:
             h0 = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=X.device)

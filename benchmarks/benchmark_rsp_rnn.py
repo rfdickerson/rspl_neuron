@@ -99,7 +99,7 @@ def train_and_evaluate(model, train_loader, val_loader, test_loader, train_data_
     linear_W = linear_W.to(device)  # Ensure linear_W is on the correct device
     optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0005)
     criterion = nn.MSELoss()
-    
+
     start_time = time.time()
     best_val_loss = float('inf')
     epochs_without_improvement = 0
