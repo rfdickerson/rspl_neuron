@@ -10,42 +10,47 @@ from torch.utils.data import DataLoader
 from rspl import RSPLRNN
 from torch.nn import GRU, LSTM
 
+# Set seeds for reproducibility
+np.random.seed(42)
+torch.manual_seed(42)
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def generate_synthetic_time_series(n_samples, seq_len):
+def generate_synthetic_time_series(n_samples, seq_len, num_inputs):
     """
-    Generate a synthetic time series dataset with trend, seasonality, and noise,
-    mimicking the M5 dataset's non-stationary properties.
+    Generate a synthetic multivariate time series dataset.
     """
     t = np.linspace(0, 10, seq_len)
     data = []
     for _ in range(n_samples):
-        trend = 0.1 * t
-        seasonal = 0.5 * np.sin(2 * np.pi * t / 50)
-        noise = np.random.normal(0, 0.1, seq_len)
-        series = trend + seasonal + noise
+        features = []
+        for i in range(num_inputs):
+            trend = 0.1 * t * (i + 1)
+            seasonal = 0.5 * np.sin(2 * np.pi * t / (50 - 5 * i))
+            noise = np.random.normal(0, 0.1, seq_len)
+            features.append(trend + seasonal + noise)
+        series = np.stack(features, axis=1)  # (seq_len, num_inputs)
         data.append(series)
-    data = np.stack(data, axis=0)  # (n_samples, seq_len)
-    return torch.from_numpy(data).float().unsqueeze(-1)  # (n_samples, seq_len, 1)
+    data = np.stack(data, axis=0)  # (n_samples, seq_len, num_inputs)
+    return torch.from_numpy(data).float()
 
 def count_parameters(model):
     """Count trainable parameters in a model."""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 def rmsse(y_true, y_pred, scale):
-    """Compute Root Mean Squared Scaled Error (RMSSE)."""
-    mse = torch.mean((y_true - y_pred) ** 2)
-    return torch.sqrt(mse / scale).item()
+    mse = torch.mean((y_true - y_pred) ** 2, dim=[0, 1])  # mean over batch and seq
+    return torch.sqrt(mse / scale).mean().item()
 
 class RNNModel(nn.Module):
     """Wrapper for RNN modules (RSPLRNN, GRU, LSTM) with a linear output layer."""
-    def __init__(self, rnn, config):
+    def __init__(self, rnn, config, num_outputs):
         super(RNNModel, self).__init__()
         self.rnn = rnn
         self.config = config
-        self.linear = nn.Linear(rnn.hidden_size, 1)
+        self.linear = nn.Linear(rnn.hidden_size, num_outputs)
 
     def forward(self, x):
         output, h_n = self.rnn(x)
@@ -68,10 +73,10 @@ def train_and_evaluate(model, train_loader, val_loader, test_loader, scale, devi
         train_loss = 0
         for batch in train_loader:
             batch = batch.to(device)
-            x = batch[:, :-1].transpose(0, 1)  # (seq_len-1, batch_size, 1)
-            y = batch[:, 1:].transpose(0, 1)   # (seq_len-1, batch_size, 1)
+            x = batch[:, :-1].transpose(0, 1)  # (seq_len-1, batch_size, num_inputs)
+            y = batch[:, 1:].transpose(0, 1)   # (seq_len-1, batch_size, num_inputs)
             optimizer.zero_grad()
-            pred, _ = model(x)  # (seq_len-1, batch_size, 1)
+            pred, _ = model(x)  # (seq_len-1, batch_size, num_outputs)
             loss = criterion(pred, y)
             loss.backward()
             optimizer.step()
@@ -109,8 +114,8 @@ def train_and_evaluate(model, train_loader, val_loader, test_loader, scale, devi
             x = batch[:, :-1].transpose(0, 1)
             y = batch[:, 1:].transpose(0, 1)
             pred, _ = model(x)
-            test_predictions.append(pred.flatten())
-            test_targets.append(y.flatten())
+            test_predictions.append(pred.reshape(-1, pred.shape[-1]))
+            test_targets.append(y.reshape(-1, y.shape[-1]))
     
     test_predictions = torch.cat(test_predictions)
     test_targets = torch.cat(test_targets)
@@ -137,36 +142,35 @@ def main():
     lr = 0.001
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    # Generate dataset
-    logger.info("Generating synthetic dataset...")
-    dataset = generate_synthetic_time_series(n_samples, seq_len)
-    n_train = int(n_samples * train_ratio)
-    n_val = int(n_samples * val_ratio)
-    train_data = dataset[:n_train]
-    val_data = dataset[n_train:n_train + n_val]
-    test_data = dataset[n_train + n_val:]
-    
-    # Compute RMSSE scale
-    diff = train_data[:, 1:, 0] - train_data[:, :-1, 0]
-    scale = torch.mean(diff ** 2)
-    
     results = []
     for config_name, config in configs.items():
         logger.info(f"\nRunning benchmark for configuration {config_name}")
         input_size = config['num_inputs']
         hidden_size = config['hidden_size']
         num_layers = config['num_layers']
+        num_outputs = input_size  # Predict all features
         
-        # Adjust sequence length for input size
+        # Generate dataset for this config
+        dataset = generate_synthetic_time_series(n_samples, seq_len, input_size)
+        n_train = int(n_samples * train_ratio)
+        n_val = int(n_samples * val_ratio)
+        train_data = dataset[:n_train]
+        val_data = dataset[n_train:n_train + n_val]
+        test_data = dataset[n_train + n_val:]
+        
+        # Compute RMSSE scale (average over all features)
+        diff = train_data[:, 1:, :] - train_data[:, :-1, :]
+        scale = torch.mean(diff ** 2)
+        
         train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_data, batch_size=batch_size)
         test_loader = DataLoader(test_data, batch_size=batch_size)
         
         # Initialize models
         models = {
-            'RSPLRNN': RNNModel(RSPLRNN(input_size, hidden_size, num_layers=num_layers), config_name),
-            'GRU': RNNModel(GRU(input_size, hidden_size, num_layers=num_layers, batch_first=False), config_name),
-            'LSTM': RNNModel(LSTM(input_size, hidden_size, num_layers=num_layers, batch_first=False), config_name)
+            'RSPLRNN': RNNModel(RSPLRNN(input_size, hidden_size, num_layers=num_layers), config_name, num_outputs),
+            'GRU': RNNModel(GRU(input_size, hidden_size, num_layers=num_layers, batch_first=False), config_name, num_outputs),
+            'LSTM': RNNModel(LSTM(input_size, hidden_size, num_layers=num_layers, batch_first=False), config_name, num_outputs)
         }
         
         # Run benchmark for each model

@@ -85,36 +85,19 @@ class RSPLRNN(nn.Module):
             self.cells.append(RSPLCell(hidden_size, hidden_size))
 
     def forward(self, X, h0=None):
-        """
-        Forward pass of the RSPLRNN.
-
-        Parameters:
-        - X (Tensor): Input sequence tensor of shape (seq_len, batch_size, input_size)
-        - h0 (Tensor, optional): Initial hidden state tensor of shape (num_layers, batch_size, hidden_size).
-                                 If None, initialized to zeros.
-
-        Returns:
-        - outputs (Tensor): Output sequence tensor of shape (seq_len, batch_size, hidden_size)
-        - h_n (Tensor): Final hidden state tensor of shape (num_layers, batch_size, hidden_size)
-        """
         seq_len, batch_size, _ = X.size()
         if h0 is None:
             h0 = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=X.device)
-        
-        # Initialize hidden states
-        h_t = h0  # (num_layers, batch_size, hidden_size)
+        h_t = h0.clone()  # Avoid in-place modification
         outputs = []
-        
-        # Process each time step
         for t in range(seq_len):
-            x_t = X[t]  # (batch_size, input_size)
-            # Process through each layer
+            x_t = X[t]
+            new_h_t = []
             for l in range(self.num_layers):
-                h_prev = h_t[l]  # (batch_size, hidden_size)
-                x_t = self.cells[l](x_t, h_prev)  # (batch_size, hidden_size)
-                # Update hidden state for this layer
-                h_t[l] = x_t
+                h_prev = h_t[l]
+                x_t = self.cells[l](x_t, h_prev)
+                new_h_t.append(x_t)
+            h_t = torch.stack(new_h_t, dim=0)
             outputs.append(x_t)
-        
-        outputs = torch.stack(outputs, dim=0)  # (seq_len, batch_size, hidden_size)
+        outputs = torch.stack(outputs, dim=0)
         return outputs, h_t
